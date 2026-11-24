@@ -226,7 +226,44 @@ function bossCard(boss) {
   return el;
 }
 
+function saveVVFProgress(){
+  if(!account)return;
+  localStorage.setItem(`yen_vvf_${account.username.toLowerCase()}`,JSON.stringify({defeated:account.vvfDefeated||[],owned:account.vvfOwned||[],penalty:account.vvfPenalty||1}));
+}
+function renderVVFCards(list){
+  if(gameVersion!=="og")return;
+  const bosses=window.YEN_VVF_GAUNTLET||[]; if(!bosses.length)return;
+  const section=document.createElement("section");section.className="vvf-gauntlet";
+  section.innerHTML=`<div class="vvf-heading"><span class="vvf-kicker">VVF // THE THREE-THRONE GAUNTLET</span><h2>THREE BOSSES. NO WAY BACK.</h2><p>Defeat each Warden in order. The next encounter stays sealed until the previous one falls.</p></div><div class="vvf-card-grid"></div>`;
+  const grid=section.querySelector('.vvf-card-grid');
+  bosses.forEach((boss,index)=>{
+    const defeated=(account.vvfDefeated||[]).includes(boss.id);
+    const previousCleared=index===0||(account.vvfDefeated||[]).includes(bosses[index-1].id);
+    const owned=(account.vvfOwned||[]).includes(boss.id);
+    const card=document.createElement('article');card.className=`vvf-card vvf-card-${index+1} ${previousCleared?'':'vvf-locked'} ${defeated?'vvf-cleared':''}`;
+    const price=toDox(boss.kishinCost);
+    const canBuy=defeated&&!owned;
+    const affordable=account.dox>=price;
+    card.innerHTML=`<div class="vvf-card-glow"></div><div class="vvf-card-top"><span>VVF // BOSS 0${index+1}</span><b>${defeated?'DEFEATED':previousCleared?'AVAILABLE':'LOCKED'}</b></div><div class="vvf-card-art"><img src="${boss.cardImage}" alt="${boss.name}"></div><div class="vvf-card-copy"><small>${boss.title}</small><h3>${boss.name}</h3><p>${index===0?'THE IRON WALL // WARMUP':index===1?'THE MARATHON NIGHTMARE':'THE FIVE-STAGE RAID GOD // UNFAIR FINALITY'}</p><div class="vvf-card-hp"><span>VITALITY</span><strong>${index===2?'1,000,000,000,000,000,000,000,000,000,000,000,000':fmtDox(boss.maxHP)} HP</strong></div><div class="vvf-kishin-price"><span>KISHIN RECRUITMENT</span><strong>${fmtDox(price)} DOX</strong></div><button class="vvf-card-action" ${defeated?(!canBuy||!affordable?'disabled':''):!previousCleared?'disabled':''}>${defeated?(owned?'KISHIN OWNED':affordable?'BUY KISHIN':'NOT ENOUGH DOX'):previousCleared?'ENTER BOSS FIGHT':'DEFEAT BOSS 0'+index+' FIRST'}</button></div>`;
+    const button=card.querySelector('button');
+    if(previousCleared&&!defeated)button.addEventListener('click',()=>startBattle(boss));
+    else if(canBuy&&affordable)button.addEventListener('click',async()=>{
+      if(!account.vvfDefeated?.includes(boss.id)||account.vvfOwned?.includes(boss.id))return;
+      if(account.dox<price){showSaveWarning('NOT ENOUGH DOX TO RECRUIT THIS KISHIN.');return;}
+      account.dox-=price;
+      account.vvfOwned=Array.isArray(account.vvfOwned)?account.vvfOwned:[];
+      account.vvfOwned.push(boss.id);
+      saveVVFProgress(); updateWallet();
+      showSaveWarning(`${boss.name} HAS JOINED YOUR KISHIN ROSTER.`,false);
+      renderLobby();
+    });
+    grid.appendChild(card);
+  });
+  list.after(section);
+}
+
 function renderLobby() {
+  document.querySelector(".vvf-gauntlet")?.remove();
   $("boss-music").pause();
   document.body.classList.remove("azael-domain");
   setBackground(CONFIG.background);
@@ -237,6 +274,7 @@ function renderLobby() {
     if (boss.hiddenFromLobby) return;
     list.appendChild(bossCard(boss));
   });
+  renderVVFCards(list);
   const merchant = document.createElement("article");
   merchant.className = "boss-card merchant-lobby-card";
   const swordCount=Array.isArray(CONFIG.merchant.skills)?CONFIG.merchant.skills.filter(skill=>skill.sword).length:0;
@@ -320,6 +358,10 @@ async function registerOrLogin() {
     potions: found.potions && typeof found.potions === "object" ? Object.fromEntries(Object.entries(found.potions).map(([k,v])=>[k,Math.min(Number.MAX_SAFE_INTEGER,Math.max(0,Math.floor(Number(v)||0)))])) : {}
   };
 
+  const vvfSaved=JSON.parse(localStorage.getItem(`yen_vvf_${account.username.toLowerCase()}`)||"{}");
+  account.vvfDefeated=Array.isArray(vvfSaved.defeated)?vvfSaved.defeated:[];
+  account.vvfOwned=Array.isArray(vvfSaved.owned)?vvfSaved.owned:[];
+  account.vvfPenalty=Number(vvfSaved.penalty)||1;
   if (account.ownedSkills.some(value => String(value).trim().toLowerCase() === "jorkaprime")) {
     ["jorkaprime", "jorkaprime-crown-split", "jorkaprime-horizon-ruin", "jorkaprime-last-reason"].forEach(id => {
       if (!account.ownedSkills.includes(id)) account.ownedSkills.push(id);
@@ -564,6 +606,8 @@ function resetBattle(boss) {
   if (currentBoss?.hooks?.cleanup && currentBossState) currentBoss.hooks.cleanup(ctxForBoss());
   currentBoss = boss;
   currentBossState = createBossState(boss);
+  boss.basePlayerMaxHP = boss.basePlayerMaxHP || boss.playerMaxHP;
+  boss.playerMaxHP = boss.basePlayerMaxHP;
   bossHP = boss.maxHP;
   bossShield = boss.shield || 0;
   playerHP = boss.playerMaxHP;
@@ -675,6 +719,7 @@ function updateHP() {
   $("boss-shield-fill").style.width = currentBoss.shield ? `${Math.max(0,bossShield/currentBoss.shield*100)}%` : "0%";
   $("boss-hp-percent").textContent = `${Math.ceil(Math.max(0,hp/maxHP*100))}%`;
   $("player-hp-text").textContent = fmt(playerHP);
+  const playerMaxLabel=document.querySelector(".player-hp-numbers span");if(playerMaxLabel)playerMaxLabel.textContent=`/ ${fmt(currentBoss.playerMaxHP)} HP`;
   $("player-hp-fill").style.width = `${Math.max(0,playerHP/currentBoss.playerMaxHP*100)}%`;
   $("player-status-text").textContent = playerHP<currentBoss.playerMaxHP*.25 ? "SOUL CRITICAL" : "STILL STANDING";
   updateWallet();
@@ -684,10 +729,12 @@ function updateHP() {
 }
 function applyBossDamage(damage) {
   let amount = Math.max(0,Number(damage)||0);
+  const modifier=currentBoss?.hooks?.modifyIncomingDamage;
+  if (modifier) amount=Math.max(0,Number(modifier(ctxForBoss(),amount))||0);
   if (bossShield>0) { const absorbed=Math.min(bossShield,amount); bossShield-=absorbed; amount-=absorbed; }
   bossHP=Math.max(0,bossHP-amount);
 }
-function damagePlayer(amount) { playerHP=Math.max(0,playerHP-Math.max(0,Number(amount)||0)); }
+function damagePlayer(amount) { const multiplier=String(currentBoss?.id||"").startsWith("vvf-")?(account?.vvfPenalty||1):1;playerHP=Math.max(0,playerHP-Math.max(0,Number(amount)||0)*multiplier); }
 function attackToRange(attack) {
   if (attack.type === "base") return {min:attack.min,max:attack.max};
   return {min:Math.round(attack.power*.75),max:Math.round(attack.power*1.2)};
@@ -839,7 +886,12 @@ async function usePlayerAttack(attack) {
   if (busy || playerHP<=0 || battleFinished || !bossAttackEnabled) return;
   if (brokenAttackIds.has(attack.key) || isCooling(attack)) return;
   busy=true;
-
+  const attackButton=[...document.querySelectorAll("#attack-grid .attack-button[data-attack-key]")].find(b=>b.dataset.attackKey===attack.key);
+  if(currentBoss?.id==="vvf-draven"&&attackButton?.dataset.vvfSealed==="1"){
+    attackButton.dataset.vvfSealed="";attackButton.classList.remove("vvf-blood-sealed");
+    playerHP=Math.max(0,playerHP-15000);updateHP();setMessage("BLOOD CHAINS // THE SEALED CARD DEALS 0 DAMAGE AND DRAINS 15,000 SOUL HP.");
+    if(playerHP<=0)showGameOver();else await bossTurn();busy=false;return;
+  }
   const sourceSkill = attack.source;
   const maxUses = Number(sourceSkill?.usesPerBattle || 0);
   const usesBefore=sourceSkill?.id?Number(skillUses.get(String(sourceSkill.id))||0):0;
@@ -978,6 +1030,12 @@ async function completeVictory(reward,bossName) {
   if (currentBoss.rewardSkill) {
     account.ownedSkills = Array.isArray(account.ownedSkills) ? account.ownedSkills : [];
     if (!account.ownedSkills.some(v => String(v) === String(currentBoss.rewardSkill))) account.ownedSkills.push(currentBoss.rewardSkill);
+  }
+  if(String(currentBoss.id).startsWith("vvf-")){
+    account.vvfDefeated=Array.isArray(account.vvfDefeated)?account.vvfDefeated:[];
+    if(!account.vvfDefeated.includes(currentBoss.id))account.vvfDefeated.push(currentBoss.id);
+    if(currentBoss.id==="vvf-vaelor")account.vvfPenalty=2.75;
+    saveVVFProgress();
   }
   account.defeated[currentBoss.id]=(account.defeated[currentBoss.id]||0)+1;
   await saveAccount();
